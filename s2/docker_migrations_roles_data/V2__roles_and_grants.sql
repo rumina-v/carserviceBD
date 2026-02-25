@@ -1,0 +1,34 @@
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rw') THEN
+    CREATE ROLE app_rw LOGIN PASSWORD 'app_rw_pass';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'analyst_ro') THEN
+    CREATE ROLE analyst_ro LOGIN PASSWORD 'analyst_ro_pass';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'etl_loader') THEN
+    CREATE ROLE etl_loader LOGIN PASSWORD 'etl_loader_pass';
+  END IF;
+END$$;
+
+GRANT USAGE ON SCHEMA public TO app_rw, analyst_ro, etl_loader;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rw;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst_ro;
+GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA public TO etl_loader;
+
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_rw, etl_loader;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rw;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT ON TABLES TO analyst_ro;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT ON TABLES TO etl_loader;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO app_rw, etl_loader;
