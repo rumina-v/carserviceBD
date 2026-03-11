@@ -1,26 +1,30 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE employee_status AS ENUM ('работает', 'уволен', 'отпуск');
+CREATE TYPE supplier_order_status AS ENUM ('формируется', 'отправлен', 'доставлен', 'отменен');
+CREATE TYPE order_priority AS ENUM ('низкий', 'обычный', 'высокий', 'срочный');
+CREATE TYPE order_status AS ENUM ('создан', 'в работе', 'выполнен', 'отменен');
 
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'employee_status') THEN
-    CREATE TYPE employee_status AS ENUM ('работает', 'уволен', 'отпуск');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_priority') THEN
-    CREATE TYPE order_priority AS ENUM ('низкий', 'обычный', 'высокий', 'срочный');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
-    CREATE TYPE order_status AS ENUM ('создан', 'в работе', 'выполнен', 'отменен');
-  END IF;
-END$$;
+CREATE TABLE car_model (
+  id serial PRIMARY KEY,
+  model_name varchar(50) NOT NULL,
+  brand_name varchar(50) NOT NULL
+);
 
-CREATE TABLE IF NOT EXISTS location (
+CREATE TABLE client (
+  id serial PRIMARY KEY,
+  full_name varchar(100) NOT NULL,
+  phone_number varchar(12) NOT NULL CHECK (phone_number ~ '^\+7[0-9]{10}$'),
+  email varchar(100),
+  driver_license varchar(20) UNIQUE
+);
+
+CREATE TABLE location (
   id serial PRIMARY KEY,
   address varchar(200) NOT NULL,
   phone_number varchar(12) NOT NULL CHECK (phone_number ~ '^\+7[0-9]{10}$'),
   working_hours varchar(50) NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS supplier (
+CREATE TABLE supplier (
   id serial PRIMARY KEY,
   company_name varchar(200) NOT NULL,
   phone_number varchar(12) NOT NULL CHECK (phone_number ~ '^\+7[0-9]{10}$'),
@@ -28,13 +32,19 @@ CREATE TABLE IF NOT EXISTS supplier (
   bank_account varchar(20) NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS car_model (
-  id serial PRIMARY KEY,
-  model_name varchar(50) NOT NULL,
-  brand_name varchar(50) NOT NULL
+CREATE TABLE service (
+  name varchar(100) PRIMARY KEY,
+  base_price integer NOT NULL CHECK (base_price > 0),
+  lead_time integer NOT NULL CHECK (lead_time > 0)
 );
 
-CREATE TABLE IF NOT EXISTS car (
+CREATE TABLE loyalty_rules (
+  min_points integer PRIMARY KEY CHECK (min_points >= 0),
+  discount_percent numeric(5,2) NOT NULL CHECK (discount_percent >= 0 AND discount_percent <= 100),
+  level_name varchar(50) NOT NULL UNIQUE
+);
+
+CREATE TABLE car (
   id serial PRIMARY KEY,
   vin varchar(17) NOT NULL UNIQUE,
   year integer NOT NULL CHECK (year >= 1990 AND year <= EXTRACT(year FROM CURRENT_DATE)),
@@ -43,15 +53,7 @@ CREATE TABLE IF NOT EXISTS car (
   model_id integer NOT NULL REFERENCES car_model(id)
 );
 
-CREATE TABLE IF NOT EXISTS client (
-  id serial PRIMARY KEY,
-  full_name varchar(100) NOT NULL,
-  phone_number varchar(12) NOT NULL CHECK (phone_number ~ '^\+7[0-9]{10}$'),
-  email varchar(100),
-  driver_license varchar(20) UNIQUE
-);
-
-CREATE TABLE IF NOT EXISTS employee (
+CREATE TABLE employee (
   id serial PRIMARY KEY,
   position varchar(50) NOT NULL,
   location_id integer NOT NULL REFERENCES location(id),
@@ -61,27 +63,21 @@ CREATE TABLE IF NOT EXISTS employee (
   hire_date date NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS service (
-  name varchar(100) PRIMARY KEY,
-  base_price integer NOT NULL CHECK (base_price > 0),
-  lead_time integer NOT NULL CHECK (lead_time > 0)
-);
-
-CREATE TABLE IF NOT EXISTS service_prices (
+CREATE TABLE shift_schedule (
   id serial PRIMARY KEY,
-  service_name varchar(100) NOT NULL REFERENCES service(name),
-  price integer NOT NULL CHECK (price > 0),
-  effective_date date DEFAULT CURRENT_DATE NOT NULL,
-  UNIQUE (service_name, effective_date)
+  location_id integer NOT NULL REFERENCES location(id),
+  shift_date date NOT NULL,
+  start_time time NOT NULL,
+  end_time time NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS nomenclature (
+CREATE TABLE nomenclature (
   article varchar(30) PRIMARY KEY,
   name varchar(200) NOT NULL,
   id_supplier integer NOT NULL REFERENCES supplier(id)
 );
 
-CREATE TABLE IF NOT EXISTS product_prices (
+CREATE TABLE product_prices (
   id serial PRIMARY KEY,
   article varchar(30) NOT NULL REFERENCES nomenclature(article),
   price integer NOT NULL CHECK (price > 0),
@@ -89,7 +85,63 @@ CREATE TABLE IF NOT EXISTS product_prices (
   UNIQUE (article, effective_date)
 );
 
-CREATE TABLE IF NOT EXISTS client_order (
+CREATE TABLE remains_of_goods (
+  id serial PRIMARY KEY,
+  location_id integer NOT NULL REFERENCES location(id),
+  article varchar(30) NOT NULL REFERENCES nomenclature(article),
+  quantity integer NOT NULL CHECK (quantity >= 0),
+  UNIQUE (location_id, article)
+);
+
+CREATE TABLE order_to_supplier (
+  id serial PRIMARY KEY,
+  id_supplier integer NOT NULL REFERENCES supplier(id),
+  id_location integer NOT NULL REFERENCES location(id),
+  total_cost integer CHECK (total_cost >= 0),
+  status supplier_order_status DEFAULT 'формируется' NOT NULL,
+  created_date timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  expected_delivery_date date
+);
+
+CREATE TABLE supplier_order_items (
+  id serial PRIMARY KEY,
+  id_order integer NOT NULL REFERENCES order_to_supplier(id),
+  article varchar(30) NOT NULL REFERENCES nomenclature(article),
+  quantity integer NOT NULL CHECK (quantity > 0),
+  unit_price integer NOT NULL CHECK (unit_price > 0),
+  total_price integer GENERATED ALWAYS AS (quantity * unit_price) STORED
+);
+
+CREATE TABLE service_prices (
+  id serial PRIMARY KEY,
+  service_name varchar(100) NOT NULL REFERENCES service(name),
+  price integer NOT NULL CHECK (price > 0),
+  effective_date date DEFAULT CURRENT_DATE NOT NULL,
+  UNIQUE (service_name, effective_date)
+);
+
+CREATE TABLE loyalty_card (
+  card_number serial PRIMARY KEY,
+  id_client integer NOT NULL UNIQUE REFERENCES client(id),
+  registration_date date NOT NULL DEFAULT CURRENT_DATE,
+  last_visit_date date,
+  points_balance integer NOT NULL DEFAULT 0 CHECK (points_balance >= 0)
+);
+
+CREATE TABLE car_client (
+  car_id integer NOT NULL REFERENCES car(id),
+  client_id integer NOT NULL REFERENCES client(id),
+  PRIMARY KEY (car_id, client_id)
+);
+
+CREATE TABLE employee_shift_schedule (
+  id serial PRIMARY KEY,
+  shift_schedule_id integer NOT NULL REFERENCES shift_schedule(id),
+  employee_id integer NOT NULL REFERENCES employee(id),
+  UNIQUE (shift_schedule_id, employee_id)
+);
+
+CREATE TABLE client_order (
   id serial PRIMARY KEY,
   id_client integer NOT NULL REFERENCES client(id),
   id_car integer NOT NULL REFERENCES car(id),
@@ -104,7 +156,7 @@ CREATE TABLE IF NOT EXISTS client_order (
   CHECK (completion_date IS NULL OR completion_date >= created_date)
 );
 
-CREATE TABLE IF NOT EXISTS client_order_items (
+CREATE TABLE client_order_items (
   id serial PRIMARY KEY,
   id_order integer NOT NULL REFERENCES client_order(id),
   product_price_id integer NOT NULL REFERENCES product_prices(id),
@@ -113,7 +165,7 @@ CREATE TABLE IF NOT EXISTS client_order_items (
   total_price integer GENERATED ALWAYS AS (quantity * unit_price) STORED
 );
 
-CREATE TABLE IF NOT EXISTS client_order_services (
+CREATE TABLE client_order_services (
   id serial PRIMARY KEY,
   id_order integer NOT NULL REFERENCES client_order(id),
   service_price_id integer NOT NULL REFERENCES service_prices(id),
@@ -122,9 +174,9 @@ CREATE TABLE IF NOT EXISTS client_order_services (
   total_price integer GENERATED ALWAYS AS (quantity * unit_price) STORED
 );
 
-CREATE TABLE IF NOT EXISTS client_order_status_log (
+CREATE TABLE client_order_status_log (
   id serial PRIMARY KEY,
   order_id integer NOT NULL REFERENCES client_order(id),
   status order_status NOT NULL,
-  changed_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+  changed_at timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
