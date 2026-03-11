@@ -1,0 +1,133 @@
+# HW — Исследование индексов PostgreSQL
+
+### 1.1. Запрос с оператором `=`
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM client
+WHERE phone_number = '+79990000000';
+```
+
+Ожидаемый результат:
+- используется `Seq Scan`;
+- PostgreSQL последовательно просматривает всю таблицу `client`;
+- при большом объёме данных время выполнения возрастает.
+
+### 1.2. Запрос с оператором `>`
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM service
+WHERE price > 5000;
+```
+
+Ожидаемый результат:
+- используется `Seq Scan`;
+- сервер читает все строки таблицы `service` и проверяет условие `price > 5000`.
+
+### 1.3. Запрос с оператором `<`
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM service
+WHERE price < 1000;
+```
+
+Ожидаемый результат:
+- также используется `Seq Scan`;
+- без индекса PostgreSQL вынужден проверять все строки таблицы.
+
+### 1.4. Запрос с `LIKE '%...'`
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM client
+WHERE full_name LIKE '%Ivan%';
+```
+
+Ожидаемый результат:
+- используется `Seq Scan`;
+- B-tree индекс для такого условия обычно не помогает, потому что поиск начинается с символа `%`.
+
+### 1.5. Запрос с `LIKE '...%'`
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM client
+WHERE full_name LIKE 'Ivan%';
+```
+
+Ожидаемый результат:
+- без индекса используется `Seq Scan`;
+- при наличии подходящего индекса возможен переход к индексному поиску.
+
+### 1.6. Запрос с `IN`
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM car
+WHERE model_id IN (1, 2, 3);
+```
+
+Ожидаемый результат:
+- без индекса используется `Seq Scan`;
+- сервер просматривает всю таблицу `car`.
+
+---
+
+## 2. Создание индексов B-tree
+
+Создадим B-tree индексы для полей, участвующих в запросах.
+
+```sql
+CREATE INDEX idx_client_phone_btree
+ON client(phone_number);
+
+CREATE INDEX idx_service_price_btree
+ON service(price);
+
+CREATE INDEX idx_client_full_name_btree
+ON client(full_name);
+
+CREATE INDEX idx_car_model_id_btree
+ON car(model_id);
+```
+
+## 3. Сравнение результатов
+
+### Без индексов
+Для всех запросов PostgreSQL в основном использует `Seq Scan`. Это означает, что таблица читается целиком, а условие проверяется для каждой строки. Такой подход работает медленно на больших таблицах.
+
+### С индексами B-tree
+Индекс B-tree хорошо подходит для:
+- `=`
+- `>`
+- `<`
+- `IN`
+- `LIKE 'текст%'`
+
+В этих случаях PostgreSQL может перейти от полного сканирования таблицы к индексному поиску, что уменьшает время выполнения и число считанных страниц.
+
+### С Hash-индексом
+Hash-индекс полезен только для запросов на точное совпадение:
+- `=`
+
+Для диапазонных запросов и шаблонного поиска он не используется.
+
+
+## 4. Итоговая таблица
+
+| Тип запроса    | Без индекса | B-tree                  | Hash                    |
+|----------------|-------------|-------------------------|-------------------------|
+| =              | Seq Scan    | Index Scan / Bitmap Scan| Index Scan              |
+| >              | Seq Scan    | Index Scan              | не используется         |
+| <              | Seq Scan    | Index Scan              | не используется         |
+| LIKE '%text'   | Seq Scan    | обычно не используется  | не используется         |
+| LIKE 'text%'   | Seq Scan    | может использоваться    | не используется         |
+| IN             | Seq Scan    | Index Scan / Bitmap Scan| может не использоваться |
