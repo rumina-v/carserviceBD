@@ -1,0 +1,227 @@
+# HW — MVCC, транзакции и блокировки в PostgreSQL
+
+## 1. Проверка служебных полей строки
+
+Создадим тестовую запись.
+
+```sql
+INSERT INTO client (full_name, phone_number, email, driver_license)
+VALUES ('MVCC Test', '+79990000000', 'mvcc@test.com', 'MVCC001');
+```
+
+Посмотрим системные параметры строки.
+
+```sql
+SELECT xmin, xmax, ctid, *
+FROM client
+WHERE full_name = 'MVCC Test';
+```
+
+### Объяснение
+
+- **xmin** — ID транзакции, создавшей строку
+- **xmax** — ID транзакции, которая удалила или обновила строку
+- **ctid** — физическое расположение строки в таблице
+
+PostgreSQL не перезаписывает строку при UPDATE — создаётся новая версия строки.
+
+---
+
+## 2. Обновление строки (MVCC)
+
+```sql
+UPDATE client
+SET email = 'mvcc_updated@test.com'
+WHERE full_name = 'MVCC Test';
+```
+
+После обновления проверим снова:
+
+```sql
+SELECT xmin, xmax, ctid, *
+FROM client
+WHERE full_name = 'MVCC Test';
+```
+
+### Результат
+
+- появится **новая версия строки**
+- **ctid изменится**
+- старая строка получит **xmax <> 0**
+
+Это демонстрирует механизм **MVCC**.
+
+---
+
+## 3. Изучение t_infomask
+
+Подключим расширение:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pageinspect;
+```
+
+Получим страницу строки:
+
+```sql
+SELECT ctid
+FROM client
+WHERE full_name = 'MVCC Test';
+```
+
+Посмотрим содержимое страницы:
+
+```sql
+SELECT *
+FROM heap_page_items(get_raw_page('client', 0));
+```
+
+### t_infomask
+
+`t_infomask` — это битовая маска состояния строки.
+
+Она хранит информацию:
+
+- строка обновлена
+- строка удалена
+- строка заблокирована
+- строка видима текущей транзакции
+
+---
+
+## 4. Проверка MVCC в разных транзакциях
+
+Открываем две сессии `psql`.
+
+### Сессия 1
+
+```sql
+BEGIN;
+
+UPDATE client
+SET email = 'session1@test.com'
+WHERE full_name = 'MVCC Test';
+```
+
+Транзакцию не коммитим.
+
+### Сессия 2
+
+```sql
+SELECT *
+FROM client
+WHERE full_name = 'MVCC Test';
+```
+
+### Результат
+
+Вторая транзакция видит **старую версию строки**.
+
+Это и есть принцип работы **MVCC**.
+
+---
+
+## 5. Моделирование дедлока
+
+### Сессия 1
+
+```sql
+BEGIN;
+UPDATE client
+SET email = 'deadlock1@test.com'
+WHERE id = 1;
+```
+
+### Сессия 2
+
+```sql
+BEGIN;
+UPDATE client
+SET email = 'deadlock2@test.com'
+WHERE id = 2;
+```
+
+Теперь создаём цикл блокировок.
+
+### Сессия 1
+
+```sql
+UPDATE client
+SET email = 'deadlock1@test.com'
+WHERE id = 2;
+```
+
+### Сессия 2
+
+```sql
+UPDATE client
+SET email = 'deadlock2@test.com'
+WHERE id = 1;
+```
+
+### Результат
+
+PostgreSQL обнаружит дедлок:
+
+```text
+ERROR: deadlock detected
+```
+
+Одна из транзакций будет автоматически завершена.
+
+---
+
+## 6. Явные блокировки
+
+Блокировка таблицы:
+
+```sql
+BEGIN;
+
+LOCK TABLE client IN ACCESS EXCLUSIVE MODE;
+```
+
+Теперь другие транзакции не смогут читать и писать в таблицу.
+
+---
+
+## 7. Блокировки строк
+
+### Сессия 1
+
+```sql
+BEGIN;
+
+SELECT *
+FROM client
+WHERE id = 1
+FOR UPDATE;
+```
+
+### Сессия 2
+
+```sql
+UPDATE client
+SET email = 'blocked@test.com'
+WHERE id = 1;
+```
+
+Вторая транзакция будет ждать завершения первой.
+
+---
+
+## 8. Очистка старых версий строк
+
+MVCC оставляет старые версии строк.
+
+Очистка выполняется через:
+
+```sql
+VACUUM client;
+```
+
+Полная очистка:
+
+```sql
+VACUUM FULL client;
+```
