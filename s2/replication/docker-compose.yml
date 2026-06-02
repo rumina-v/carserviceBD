@@ -1,0 +1,66 @@
+services:
+  primary:
+    image: postgres:15
+    container_name: carservice-primary
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: carservice
+    ports:
+      - "5432:5432"
+    volumes:
+      - primary_data:/var/lib/postgresql/data
+      - ./primary/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./primary/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./primary/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d carservice"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  replica1:
+    image: postgres:15
+    container_name: carservice-replica1
+    environment:
+      PGPASSWORD: replicatorpass
+    ports:
+      - "5433:5432"
+    volumes:
+      - replica1_data:/var/lib/postgresql/data
+    depends_on:
+      primary:
+        condition: service_healthy
+    command: >
+      bash -c "
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        rm -rf /var/lib/postgresql/data/*;
+        pg_basebackup -h primary -D /var/lib/postgresql/data -U replicator -P -R;
+      fi;
+      exec postgres"
+
+  replica2:
+    image: postgres:15
+    container_name: carservice-replica2
+    environment:
+      PGPASSWORD: replicatorpass
+    ports:
+      - "5434:5432"
+    volumes:
+      - replica2_data:/var/lib/postgresql/data
+    depends_on:
+      primary:
+        condition: service_healthy
+    command: >
+      bash -c "
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        rm -rf /var/lib/postgresql/data/*;
+        pg_basebackup -h primary -D /var/lib/postgresql/data -U replicator -P -R;
+      fi;
+      exec postgres"
+
+volumes:
+  primary_data:
+  replica1_data:
+  replica2_data:
